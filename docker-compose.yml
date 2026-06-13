@@ -1,0 +1,226 @@
+version: '3.8'
+
+services:
+  # Primary Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Caching Layer
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Message Queue (Zookeeper + Kafka)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    depends_on:
+      - zookeeper
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Observability Stack
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+
+  grafana:
+    image: grafana/grafana:10.0.0
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./infrastructure/grafana/provisioning/datasources/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yaml
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    depends_on:
+      - prometheus
+
+  loki:
+    image: grafana/loki:2.8.2
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./infrastructure/loki/loki-config.yaml:/etc/loki/loki-config.yaml
+    command: -config.file=/etc/loki/loki-config.yaml
+
+  # Application Core Services
+  user-service-1:
+    build: ./services/user-service
+    container_name: user-service-1
+    restart: always
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/user_db
+      - REDIS_HOST=redis
+      - LOKI_URL=http://loki:3100/loki/api/v1/push
+      - SERVICE_NAME=user-service-1
+    cap_add:
+      - NET_ADMIN
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      loki:
+        condition: service_started
+
+  user-service-2:
+    build: ./services/user-service
+    container_name: user-service-2
+    restart: always
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/user_db
+      - REDIS_HOST=redis
+      - LOKI_URL=http://loki:3100/loki/api/v1/push
+      - SERVICE_NAME=user-service-2
+    cap_add:
+      - NET_ADMIN
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      loki:
+        condition: service_started
+
+  order-service:
+    build: ./services/order-service
+    container_name: order-service
+    restart: always
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/order_db
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - LOKI_URL=http://loki:3100/loki/api/v1/push
+      - SERVICE_NAME=order-service
+    cap_add:
+      - NET_ADMIN
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      loki:
+        condition: service_started
+
+  notif-service:
+    build: ./services/notif-service
+    container_name: notif-service
+    restart: always
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - LOKI_URL=http://loki:3100/loki/api/v1/push
+      - SERVICE_NAME=notif-service
+    cap_add:
+      - NET_ADMIN
+    depends_on:
+      kafka:
+        condition: service_healthy
+      loki:
+        condition: service_started
+
+  metric-collector:
+    build: ./services/metric-collector
+    container_name: metric-collector
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - prometheus
+
+  # Chaos Engine
+  chaos-engine:
+    build: ./chaos-engine
+    container_name: chaos-engine
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - LOKI_URL=http://loki:3100/loki/api/v1/push
+      - SERVICE_NAME=chaos-engine
+    depends_on:
+      - prometheus
+
+  # Dashboard Backend (WebSocket Server)
+  dashboard-backend:
+    build: ./dashboard/backend
+    container_name: dashboard-backend
+    environment:
+      - PROMETHEUS_URL=http://prometheus:9090
+      - LOKI_URL=http://loki:3100/loki/api/v1/push
+      - SERVICE_NAME=dashboard-backend
+    depends_on:
+      - prometheus
+
+  # Dashboard Frontend (React App)
+  dashboard-frontend:
+    build: ./dashboard/frontend
+    container_name: dashboard-frontend
+    depends_on:
+      - dashboard-backend
+
+  # Gateway Proxy / Load Balancer
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - user-service-1
+      - user-service-2
+      - order-service
+      - notif-service
+      - chaos-engine
+      - dashboard-backend
+      - dashboard-frontend

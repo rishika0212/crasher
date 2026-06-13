@@ -1,0 +1,59 @@
+# ─── Python (FastAPI services, chaos-engine, dashboard backend, metric-collector) ───
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+.env
+.env.*
+!.env.example
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ─── Node / Vite (dashboard frontend) ───
+node_modules/
+dashboard/frontend/dist/
+dashboard/frontend/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.eslintcache
+
+# ─── Docker / runtime data ───
+# Local volume data, if any service writes to the tree
+**/data/
+*.pid
+
+# ─── Observability local state ───
+# Loki/Prometheus/Grafana write into container tmpfs, but ignore any host-mounted state
+loki-data/
+prometheus-data/
+grafana-data/
+
+# ─── Logs ───
+*.log
+logs/
+
+# ─── Editor / OS ───
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── AI tooling scratch state ───
+.refact/
