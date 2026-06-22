@@ -7,13 +7,11 @@ import threading
 from typing import List
 from fastapi import FastAPI, status
 from fastapi.responses import JSONResponse
-from prometheus_fastapi_instrumentator import Instrumentator
-from prometheus_client import Gauge
 from confluent_kafka import Consumer, KafkaError
-from loki_logger import setup_loki_logger
+import crashboard
 
-# Initialize Loki Logger
-setup_loki_logger(os.getenv("SERVICE_NAME", "notif-service"))
+# Initialize Loki Logger via CrashBoard SDK
+crashboard.setup_loki_logger(os.getenv("SERVICE_NAME", "notif-service"))
 
 # Logging
 logger = logging.getLogger("notif-service")
@@ -24,9 +22,6 @@ app = FastAPI(
     description="Consumes order events from Kafka and tracks lag",
     version="1.0.0"
 )
-
-# Custom Prometheus gauge for Kafka Consumer Lag
-KAFKA_LAG_GAUGE = Gauge("kafka_consumer_lag", "Current consumer lag in message count for order_created topic")
 
 # In-memory notifications log (sliding window of last 100)
 notifications_log = []
@@ -46,33 +41,6 @@ kafka_conf = {
 consumer_instance = None
 consumer_active = False
 
-def calculate_lag(consumer):
-    """Calculates partition lag by checking committed vs watermark offsets."""
-    try:
-        partitions = consumer.assignment()
-        if not partitions:
-            return 0
-            
-        total_lag = 0
-        for p in partitions:
-            # Get committed offset
-            committed = consumer.committed([p], timeout=0.5)
-            if committed and committed[0].offset >= 0:
-                last_committed = committed[0].offset
-                # Get watermarks (low, high)
-                low, high = consumer.get_watermark_offsets(p, timeout=0.5)
-                lag = high - last_committed
-                if lag > 0:
-                    total_lag += lag
-            else:
-                # If offset is not committed yet, lag is high watermark
-                low, high = consumer.get_watermark_offsets(p, timeout=0.5)
-                total_lag += high
-        return total_lag
-    except Exception as e:
-        logger.warning(f"Error calculating consumer lag: {e}")
-        return 0
-
 def kafka_consumer_loop():
     global consumer_instance, consumer_active
     logger.info("Starting Kafka Consumer thread...")
@@ -88,19 +56,15 @@ def kafka_consumer_loop():
             logger.error(f"Failed to initialize Kafka Consumer: {e}. Retrying in 3s...")
             time.sleep(3)
             
-    last_lag_check = 0
+    # Initialize telemetry via CrashBoard SDK, passing the active consumer
+    # This automatically tracks HTTP metrics and runs the background consumer lag gauge thread
+    crashboard.init(app, os.getenv("SERVICE_NAME", "notif-service"), kafka_consumer=consumer_instance)
+
     while True:
         try:
             # Poll for new messages
             msg = consumer_instance.poll(0.5)
             
-            # Periodically calculate and update lag gauge (every 1 second)
-            now = time.time()
-            if now - last_lag_check > 1.0:
-                lag = calculate_lag(consumer_instance)
-                KAFKA_LAG_GAUGE.set(lag)
-                last_lag_check = now
-
             if msg is None:
                 continue
             if msg.error():
@@ -140,9 +104,6 @@ def on_startup():
     # Start the consumer daemon thread
     t = threading.Thread(target=kafka_consumer_loop, daemon=True)
     t.start()
-
-# Instrument FastAPI with Prometheus exporter
-Instrumentator().instrument(app).expose(app)
 
 @app.get("/health")
 def health_check():

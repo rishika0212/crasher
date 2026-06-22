@@ -76,6 +76,11 @@ def setup_loki_logger(service_name: str):
         return
     
     logger = logging.getLogger()
+    # Check if we already have a LokiQueueHandler
+    for h in logger.handlers:
+        if isinstance(h, LokiQueueHandler):
+            return
+            
     handler = LokiQueueHandler(loki_url, service_name)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)

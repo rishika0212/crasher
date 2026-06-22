@@ -6,15 +6,14 @@ from typing import List
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from sqlmodel import Session, select
-from prometheus_fastapi_instrumentator import Instrumentator
 from confluent_kafka import Producer
+import crashboard
 
 from database import init_db, get_session, check_db_health
 from models import Order
-from loki_logger import setup_loki_logger
 
-# Initialize Loki Logger
-setup_loki_logger(os.getenv("SERVICE_NAME", "order-service"))
+# Initialize Loki Logger via CrashBoard SDK
+crashboard.setup_loki_logger(os.getenv("SERVICE_NAME", "order-service"))
 
 # Logging
 logger = logging.getLogger("order-service")
@@ -41,13 +40,13 @@ try:
 except Exception as e:
     logger.error(f"Failed to initialize Kafka Producer: {e}")
 
+# Initialize telemetry and instrument Kafka Producer
+crashboard.init(app, os.getenv("SERVICE_NAME", "order-service"), kafka_producer=producer)
+
 # Startup
 @app.on_event("startup")
 def on_startup():
     init_db()
-
-# Instrument the app for Prometheus metrics
-Instrumentator().instrument(app).expose(app)
 
 def check_kafka_health():
     if not producer:
@@ -106,6 +105,7 @@ def create_order(order: Order, session: Session = Depends(get_session)):
         
         if producer:
             try:
+                # The produce call is monkeypatched by CrashBoard to log produced count
                 producer.produce(
                     "order_created",
                     key=str(order.id),

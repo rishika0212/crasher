@@ -5,23 +5,18 @@ from typing import List
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from sqlmodel import Session, select
-from prometheus_fastapi_instrumentator import Instrumentator
 import redis
+import crashboard
 
 from database import init_db, get_session, check_db_health
 from models import User
-from loki_logger import setup_loki_logger
 
-# Initialize Loki Logger
-setup_loki_logger(os.getenv("SERVICE_NAME", "user-service"))
+# Initialize Loki Logger via CrashBoard SDK
+crashboard.setup_loki_logger(os.getenv("SERVICE_NAME", "user-service"))
 
 # Logging
 logger = logging.getLogger("user-service")
 logging.basicConfig(level=logging.INFO)
-
-from prometheus_client import Counter
-CACHE_HIT_COUNTER = Counter("cache_hits_total", "Total Redis cache hits")
-CACHE_MISS_COUNTER = Counter("cache_misses_total", "Total Redis cache misses")
 
 app = FastAPI(
     title="User Service",
@@ -40,13 +35,13 @@ redis_client = redis.Redis(
     socket_connect_timeout=1.0
 )
 
+# Initialize CrashBoard CaaS telemetry and instrument Redis
+crashboard.init(app, os.getenv("SERVICE_NAME", "user-service"), redis_client=redis_client)
+
 # Startup event
 @app.on_event("startup")
 def on_startup():
     init_db()
-
-# Instrument the app for Prometheus metrics
-Instrumentator().instrument(app).expose(app)
 
 def check_redis_health():
     try:
@@ -99,19 +94,17 @@ def create_user(user: User, session: Session = Depends(get_session)):
 
 @app.get("/users/{user_id}", response_model=User)
 def get_user(user_id: int, session: Session = Depends(get_session)):
-    # 1. Try Redis cache first
+    # 1. Try Redis cache first (the .get method is monkey-patched by the SDK to track metrics)
     try:
         cached_user = redis_client.get(f"user:{user_id}")
         if cached_user:
             logger.info(f"Cache HIT for user {user_id}")
-            CACHE_HIT_COUNTER.inc()
             return User(**json.loads(cached_user))
     except Exception as e:
         logger.warning(f"Redis connection error on get user: {e}")
     
     # 2. Cache miss or Redis down: query PostgreSQL
     logger.info(f"Cache MISS/BYPASS for user {user_id}")
-    CACHE_MISS_COUNTER.inc()
     try:
         user = session.get(User, user_id)
         if not user:

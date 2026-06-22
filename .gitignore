@@ -56,4 +56,5 @@ Thumbs.db
 desktop.ini
 
 # ─── AI tooling scratch state ───
+.claude/
 .refact/

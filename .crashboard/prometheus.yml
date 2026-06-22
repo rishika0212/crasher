@@ -1,0 +1,34 @@
+global:
+  evaluation_interval: 1s
+  scrape_interval: 1s
+scrape_configs:
+- job_name: prometheus
+  static_configs:
+  - targets:
+    - localhost:9090
+- job_name: user-service
+  metrics_path: /metrics
+  static_configs:
+  - targets:
+    - user-service-1:8000
+    - user-service-2:8000
+- job_name: order-service
+  metrics_path: /metrics
+  static_configs:
+  - targets:
+    - order-service:8000
+- job_name: notif-service
+  metrics_path: /metrics
+  static_configs:
+  - targets:
+    - notif-service:8000
+- job_name: chaos-engine
+  metrics_path: /metrics
+  static_configs:
+  - targets:
+    - chaos-engine:8000
+- job_name: metric-collector
+  metrics_path: /metrics
+  static_configs:
+  - targets:
+    - metric-collector:8000
