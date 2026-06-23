@@ -11,7 +11,7 @@ def create_panel_base(id_num, title, p_type, x, y, w, h):
         "title": title,
         "type": p_type,
         "gridPos": {"x": x, "y": y, "w": w, "h": h},
-        "datasource": {"type": "prometheus", "uid": "Prometheus"},
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
         "targets": []
     }
 

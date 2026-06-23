@@ -1,3 +1,11 @@
+# CrashBoard observability + chaos overlay.
+# Generated into .crashboard/ by `crashboard init`. All build contexts are
+# self-contained inside .crashboard/ (engine/ and collector/ are copied from the
+# installed SDK), so this overlay drops into ANY repo without extra source.
+#
+# Run it merged with your own compose:
+#   docker compose -f docker-compose.yml -f .crashboard/docker-compose.crashboard.yml up -d --build
+# (or just `crashboard up`)
 version: '3.8'
 
 services:
@@ -36,17 +44,22 @@ services:
       - ./infrastructure/loki/loki-config.yaml:/etc/loki/loki-config.yaml
     command: -config.file=/etc/loki/loki-config.yaml
 
+  # Exposes per-container CPU/memory/status to Prometheus via the Docker socket.
   metric-collector:
-    build: ../services/metric-collector
+    build: ./collector
     container_name: metric-collector
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - prometheus
 
+  # Fault-injection API. Published on 8080 so `crashboard trigger` can reach it
+  # from the host without colliding with your app services on 8000.
   chaos-engine:
-    build: ../chaos-engine
+    build: ./engine
     container_name: chaos-engine
+    ports:
+      - "8080:8000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
@@ -54,19 +67,3 @@ services:
       - SERVICE_NAME=chaos-engine
     depends_on:
       - prometheus
-
-  dashboard-backend:
-    build: ../dashboard/backend
-    container_name: dashboard-backend
-    environment:
-      - PROMETHEUS_URL=http://prometheus:9090
-      - LOKI_URL=http://loki:3100/loki/api/v1/push
-      - SERVICE_NAME=dashboard-backend
-    depends_on:
-      - prometheus
-
-  dashboard-frontend:
-    build: ../dashboard/frontend
-    container_name: dashboard-frontend
-    depends_on:
-      - dashboard-backend
