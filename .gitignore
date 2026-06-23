@@ -58,3 +58,6 @@ desktop.ini
 # ─── AI tooling scratch state ───
 .claude/
 .refact/
+
+# ─── CrashBoard generated overlay (output of `crashboard init`) ───
+.crashboard/
