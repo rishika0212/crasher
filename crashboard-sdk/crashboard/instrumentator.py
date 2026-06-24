@@ -50,20 +50,53 @@ def instrument_redis(client):
     client.get = wrapped_get
     client._crashboard_instrumented = True
 
+class _InstrumentedProducer:
+    """Transparent proxy that counts produced messages.
+
+    The real ``confluent_kafka.Producer`` is a C extension whose ``produce``
+    attribute is read-only, so it cannot be monkeypatched in place. When that
+    is the case we wrap the producer in this proxy, which forwards every other
+    attribute to the underlying producer and only intercepts ``produce``.
+    """
+
+    def __init__(self, producer):
+        object.__setattr__(self, "_producer", producer)
+        object.__setattr__(self, "_crashboard_instrumented", True)
+
+    def produce(self, topic, *args, **kwargs):
+        KAFKA_PRODUCED_COUNTER.labels(topic=topic).inc()
+        return self._producer.produce(topic, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._producer, name)
+
+
 def instrument_kafka_producer(producer):
-    """Monkeypatch confluent_kafka Producer to track outbound message count."""
-    if hasattr(producer, "_crashboard_instrumented"):
-        return
-        
+    """Instrument a Kafka producer to track outbound message count.
+
+    Returns the producer to use: the same object when ``produce`` can be
+    patched in place, otherwise a counting proxy (see ``_InstrumentedProducer``).
+    Callers should adopt the returned object.
+    """
+    if getattr(producer, "_crashboard_instrumented", False):
+        return producer
+
     logger.info("Instrumenting Kafka Producer for CrashBoard traffic metrics.")
     original_produce = producer.produce
-    
+
     def wrapped_produce(topic, *args, **kwargs):
         KAFKA_PRODUCED_COUNTER.labels(topic=topic).inc()
         return original_produce(topic, *args, **kwargs)
-        
-    producer.produce = wrapped_produce
-    producer._crashboard_instrumented = True
+
+    try:
+        producer.produce = wrapped_produce
+        producer._crashboard_instrumented = True
+        return producer
+    except (AttributeError, TypeError):
+        # Read-only C-extension producer: fall back to a transparent proxy so
+        # the host service still boots and the metric still increments.
+        logger.info("Producer.produce is read-only; wrapping in a counting proxy.")
+        return _InstrumentedProducer(producer)
 
 def calculate_lag(consumer):
     """Calculates partition lag by checking committed vs watermark offsets."""
@@ -111,17 +144,22 @@ def init_instrumentation(app: FastAPI, service_name: str, redis_client=None, kaf
     Enables prometheus endpoint, monkeypatches Redis and Kafka, and initializes logging.
     """
     logger.info(f"Initializing CrashBoard instrumentation for service: {service_name}")
-    
+
     # 1. Expose metrics endpoint
     Instrumentator().instrument(app).expose(app)
-    
+
     # 2. Redis integration
     if redis_client is not None:
         instrument_redis(redis_client)
-        
+
     # 3. Kafka integration
+    instrumented_producer = None
     if kafka_producer is not None:
-        instrument_kafka_producer(kafka_producer)
-        
+        instrumented_producer = instrument_kafka_producer(kafka_producer)
+
     if kafka_consumer is not None:
         start_kafka_lag_thread(kafka_consumer, topic=kafka_topic)
+
+    # Return the instrumented producer so callers can adopt the proxy used when
+    # the underlying producer's `produce` cannot be patched in place.
+    return instrumented_producer

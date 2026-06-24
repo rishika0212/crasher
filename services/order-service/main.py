@@ -40,8 +40,10 @@ try:
 except Exception as e:
     logger.error(f"Failed to initialize Kafka Producer: {e}")
 
-# Initialize telemetry and instrument Kafka Producer
-crashboard.init(app, os.getenv("SERVICE_NAME", "order-service"), kafka_producer=producer)
+# Initialize telemetry and instrument Kafka Producer. init() returns the
+# instrumented producer (a transparent proxy when the underlying produce is
+# read-only), so adopt it for all subsequent publishes.
+producer = crashboard.init(app, os.getenv("SERVICE_NAME", "order-service"), kafka_producer=producer) or producer
 
 # Startup
 @app.on_event("startup")

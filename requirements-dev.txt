@@ -1,0 +1,5 @@
+# Development / test dependencies for CrashBoard.
+# Install with:  pip install -r requirements-dev.txt
+pytest>=8.0
+httpx>=0.27          # required by starlette.testclient.TestClient
+ruff>=0.4            # linting / formatting (see ruff.toml)

@@ -6,7 +6,6 @@
 # Run it merged with your own compose:
 #   docker compose -f docker-compose.yml -f .crashboard/docker-compose.crashboard.yml up -d --build
 # (or just `crashboard up`)
-version: '3.8'
 
 services:
   prometheus:
